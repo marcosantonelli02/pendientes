@@ -579,17 +579,56 @@ input[type="date"].field { padding: 9px 12px; width: auto; font-size: 15px; }
         updateBadge(); render();
       });
     }
+    const pushCode = readPushCode();
+    if ("PushManager" in window && "serviceWorker" in navigator) {
+      tool("Aviso diario", pushCode ? "Activado en este iPhone" : "Una notificación al día que abre esta app", pushCode ? "Ver código" : "Activar", enablePush);
+    }
     tool("Guardar copia de seguridad", "Descarga un archivo con todos tus pendientes", "Exportar", exportBackup);
     tool("Restaurar copia", "Carga un archivo exportado antes", "Importar", () => $("importFile").click());
     view.append(tools);
 
-    const det = document.createElement("details"); det.className = "setup";
-    det.innerHTML = '<summary>Configurar el aviso diario</summary><ol>' +
-      '<li>Abre la app <b>Atajos</b> → pestaña <b>Automatización</b> → <b>+</b> → <b>Hora del día</b>.</li>' +
-      '<li>Elige la hora (por ejemplo 9:00 p.m.), <b>Diariamente</b>, y marca <b>Ejecutar inmediatamente</b>.</li>' +
-      '<li>Agrega la acción <code>Mostrar notificación</code> con el texto “¿Ya revisaste tus pendientes?”.</li>' +
-      '<li>Cada noche te llegará el aviso. Abre <b>Pendientes</b> desde su ícono y toca “Ya revisé mi lista hoy”.</li></ol>';
-    view.append(det);
+    if (pushCode && showPushCode) {
+      const box = document.createElement("div"); box.className = "setup";
+      box.innerHTML = '<b>Código de tu iPhone</b><p class="hint" style="text-align:left;margin:6px 0 10px">Cópialo y pégalo en GitHub como el secreto <code>SUSCRIPCION</code>. Solo hace falta una vez.</p>';
+      const ta = document.createElement("textarea"); ta.className = "field"; ta.id = "pushCode"; ta.readOnly = true; ta.rows = 5;
+      ta.style.fontSize = "12px"; ta.value = pushCode;
+      const b = document.createElement("button"); b.type = "button"; b.className = "big-btn"; b.style.marginTop = "10px"; b.textContent = "Copiar código";
+      b.onclick = async () => {
+        try { await navigator.clipboard.writeText(pushCode); toast("Código copiado"); }
+        catch (e) { ta.focus(); ta.select(); toast("Selecciónalo y cópialo a mano"); }
+      };
+      box.append(ta, b); view.append(box);
+    }
+  }
+
+  // ---- aviso diario (notificaciones push) ----
+  const VAPID_PUBLIC = "BGiGmxaStGDBWUpHh-4gcenJMavPPsNIsnqy02JsXF7OArPRIMNO1OsCnw4Zglu6PRTcUFEy5jSBwfsRI107-9U";
+  const PUSH_KEY = "pendientes.push";
+  let showPushCode = false;
+  function readPushCode() { try { return localStorage.getItem(PUSH_KEY); } catch (e) { return null; } }
+  function b64ToBytes(s) {
+    const pad = "=".repeat((4 - (s.length % 4)) % 4);
+    const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  }
+  async function enablePush() {
+    if (/iPhone|iPad|iPod/.test(navigator.userAgent) && !isStandalone()) {
+      setStatus("Primero instala la app: en Safari toca Compartir → Agregar a pantalla de inicio, y ábrela desde su ícono.");
+      return;
+    }
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { setStatus("Sin permiso no puedo enviarte avisos. Actívalo en Ajustes → Notificaciones → Pendientes."); return; }
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(VAPID_PUBLIC) });
+      const code = JSON.stringify(sub.toJSON());
+      try { localStorage.setItem(PUSH_KEY, code); } catch (e) {}
+      showPushCode = true; setStatus(""); updateBadge(); render();
+      toast("Avisos activados");
+    } catch (e) {
+      setStatus("No se pudieron activar los avisos en este dispositivo. Asegúrate de tener iOS 16.4 o más nuevo.");
+    }
   }
 
   // ---- instalación, ícono y copias ----
