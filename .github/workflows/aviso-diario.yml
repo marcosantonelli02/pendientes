@@ -1,0 +1,79 @@
+# Envía cada día una notificación a tu iPhone que abre la app Pendientes.
+# Corre cada hora y solo envía cuando en tu zona horaria es la HORA elegida.
+# Se configura en Settings → Secrets and variables → Actions:
+#   Secretos:  VAPID_PUBLICA, VAPID_PRIVADA, SUSCRIPCION
+#   Variables: ZONA (ej. America/Santiago), HORA (0-23, ej. 21)
+name: Aviso diario
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  aviso:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar web-push
+        run: npm install web-push@3.6.7 --no-save --silent --no-audit --no-fund
+
+      - name: Enviar aviso
+        env:
+          VAPID_PUBLICA: ${{ secrets.VAPID_PUBLICA }}
+          VAPID_PRIVADA: ${{ secrets.VAPID_PRIVADA }}
+          SUSCRIPCION: ${{ secrets.SUSCRIPCION }}
+          ZONA: ${{ vars.ZONA }}
+          HORA: ${{ vars.HORA }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          node <<'EOF'
+          const webpush = require("web-push");
+          const { VAPID_PUBLICA, VAPID_PRIVADA, SUSCRIPCION, MANUAL } = process.env;
+          const zona = process.env.ZONA || "UTC";
+          const hora = parseInt(process.env.HORA || "21", 10);
+          if (!VAPID_PUBLICA || !VAPID_PRIVADA || !SUSCRIPCION) {
+            console.error("Faltan secretos: revisa VAPID_PUBLICA, VAPID_PRIVADA y SUSCRIPCION.");
+            process.exit(1);
+          }
+          const ahora = parseInt(new Intl.DateTimeFormat("en-US", { timeZone: zona, hour: "numeric", hourCycle: "h23" }).format(new Date()), 10);
+          if (MANUAL !== "true" && ahora !== hora) {
+            console.log(`En ${zona} son las ${ahora}h; el aviso sale a las ${hora}h.`);
+            process.exit(0);
+          }
+          webpush.setVapidDetails("https://marcosantonelli02.github.io/pendientes/", VAPID_PUBLICA.trim(), VAPID_PRIVADA.trim());
+          const payload = JSON.stringify({ title: "Pendientes", body: "¿Ya revisaste tus pendientes de hoy?" });
+          webpush.sendNotification(JSON.parse(SUSCRIPCION), payload, { TTL: 6 * 3600 })
+            .then(() => console.log("Aviso enviado."))
+            .catch((err) => {
+              if (err.statusCode === 404 || err.statusCode === 410) {
+                console.error("El código del iPhone ya no es válido. Abre la app → Racha → Aviso diario → Ver código, y actualiza el secreto SUSCRIPCION.");
+              } else {
+                console.error("No se pudo enviar:", err.statusCode || "", err.body || err.message);
+              }
+              process.exit(1);
+            });
+          EOF
+
+      # GitHub pausa las tareas programadas de repos sin actividad en 60 días.
+      # Una vez al mes se guarda la fecha para mantener el aviso funcionando.
+      - name: Mantener activo
+        if: github.event_name == 'schedule'
+        run: |
+          mes=$(date -u +%Y-%m)
+          if [ "$(cat .github/ultimo-mes.txt 2>/dev/null)" != "$mes" ]; then
+            echo "$mes" > .github/ultimo-mes.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git add .github/ultimo-mes.txt
+            git commit -m "Mantener activo el aviso diario ($mes)"
+            git push
+          fi
